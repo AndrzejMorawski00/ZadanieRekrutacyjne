@@ -1,7 +1,8 @@
 import os
-from typing import Optional
+from typing import Dict, Optional, TypedDict, Literal
 from dotenv import load_dotenv
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageParam
 from bs4 import BeautifulSoup, Tag
 
 INPUT_ARTICLE_FILE = 'tresc_artykulu.txt'
@@ -134,25 +135,20 @@ CSS_STYLES = """
 """
 
 
-class Solution:
-    def __init__(self, input_file: str, output_file: str) -> None:
-        self.file_content: str = ''
-        self.input_file: str = input_file
-        self.output_file: str = output_file
-        self.client: OpenAI = OpenAI(api_key=os.environ['OPENAI_API_KEY'])
+class AiMessage(TypedDict):
+    role: Literal['system', 'user', 'assistant']
+    content: str
 
-    def generate_article(self) -> None:
-        self.read_from_file(self.input_file)
-        completion = self.client.chat.completions.create(
-            model='gpt-3.5-turbo',
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You're a web developer assistant who can create a website based on a context provided by a user."
-                },
-                {
-                    "role": "user",
-                    "content": f"""
+
+AI_ROLE: ChatCompletionMessageParam = {
+    "role": "system",
+    "content": "You're a web developer assistant who can create a website based on a context provided by a user."
+
+}
+
+AI_MODEL = 'gpt-3.5-turbo'
+
+GENERATE_ARTICLE_MESSAGE: str = """
                     Based on a text file's content that I provide, generate an HTML site following these rules:
                     1. Wrap the entire content into <article> tag.
                     2. Use <header> and <h1> tags to mark article title
@@ -164,80 +160,104 @@ class Solution:
                     7. Read any UTF-8 characters correctly from the file and make sure they will be displayed correctly in HTML document. Do not modify file content.
                     8. Return only HTML content without any CSS, JS which will be ready to place inside <body> tags.
                     9. Avoid generating additional comments, as the code should be ready for direct insertion into the site without further modification.
-                    The content from the text file is as follows: {self.file_content}
+                    The content from the text file is as follows:
                     """
-                }]
-        )
-        response: Optional[str] = completion.choices[0].message.content
-        file_content = response.replace("```html\n", "").replace(
-            "```", "") if response else 'Failed To Generate a Response'
-        self.write_to_file(file_content, self.output_file)
 
-    def generate_template(self, css_code: str) -> None:
-        completion = self.client.chat.completions.create(model='gpt-3.5-turbo', messages=[
-            {
-                "role": "system",
-                "content": "You're a web developer assistant who can create a website based on a context provided by a user."
-            },
-            {
-                'role': 'user',
-                'content': f"""
+
+GENERATE_TEMPLATE_MESSAGE: str = f"""
                 Generate a simple HTML website template which will meet these conditions:
                 1. Set site title to {'Article Template'}.
                 2. Don't generate any content between <body> tags.
                 3. Generate pure HTML code. Don't provide any additional messages or modify code I provided.
                 4. Inject styles that I provide into <style> tags.
-                CSS Styles provided by me: {css_code}
+                CSS Styles provided by me:
                 """
-            }
-        ])
-        response: Optional[str] = completion.choices[0].message.content
-        file_content = response.replace("```html\n", "").replace(
-            "```", "") if response else 'Failed To Generate a Response'
-        self.write_to_file(file_content, 'template.html')
 
-    def merge_template_and_article_using_ai(self, template: str, article: str, target: str) -> None:
-        template_content = self.read_from_file(template)
-        article_content = self.read_from_file(article)
-
-        completion = self.client.chat.completions.create(model='gpt-3.5-turbo', messages=[
-            {
-                "role": "system",
-                "content": "You're a web developer assistant who can create a website based on a context provided by a user."
-            },
-            {
-                'role': 'user',
-                'content': f"""
+MERGE_TEMPLATE_AND_ARTICLE_MESSAGE: str = f"""
                 Inject article content into template between <body> tags.
                 Don't generate any additional comments or code return merged file.
                 The only change I want is change title to 'Merged Site'
-                Template: {template_content}
-                Artice: {article_content}
                 """
-            }
-        ])
-        response: Optional[str] = completion.choices[0].message.content
-        file_content = response.replace("```html\n", "").replace(
-            "```", "") if response else 'Failed To Generate a Response'
-        self.write_to_file(file_content, target)
 
-    def merge_template_and_article_using_bs4(self, template: str, article: str, target: str) -> None:
-        template_content = self.read_from_file(template)
-        article_content = self.read_from_file(article)
+
+
+class Solution:
+    def __init__(self) -> None:
+        self.client: OpenAI = OpenAI(api_key=os.environ['OPENAI_API_KEY'])
+
+    def process_ai_response(self, response: Optional[str]) -> str:
+        if not response:
+            return 'Failed To generate a response'
+        return response.replace("```html\n", "").replace(
+            "```", "")
+
+    def generate_prompt(self, message: str, arguments: Dict[str, str]) -> ChatCompletionMessageParam:
+        formatted_arguments: str = ''
+        for key, value in arguments.items():
+            formatted_arguments += f'{key}: {value} \n'
+
+        user_message: ChatCompletionMessageParam = {
+            'role': 'user',
+            'content': f"""
+            {message}
+            Here I provide a file content that I talked about earlier as key, value pairs:
+            {formatted_arguments}
+            """
+        }
+
+        return user_message
+
+    def get_ai_response(self, user_message: ChatCompletionMessageParam) -> Optional[str]:
+        completion = self.client.chat.completions.create(
+            model=AI_MODEL,
+            messages=[
+                AI_ROLE,
+                user_message
+            ]
+        )
+        return completion.choices[0].message.content
+
+    def generate_article(self, input_file: str,  output_file: str) -> None:
+        file_content: str = self.read_data_from_file(input_file)
+
+        user_prompt: ChatCompletionMessageParam = self.generate_prompt(GENERATE_ARTICLE_MESSAGE, {
+            'ArticleFileContent': file_content})
+        ai_response: Optional[str] = self.get_ai_response(user_prompt)
+        processed_data: str = self.process_ai_response(ai_response)
+        self.write_data_to_file(processed_data, output_file)
+
+    def generate_template(self, css_code: str, output_file: str) -> None:
+
+        user_prompt: ChatCompletionMessageParam = self.generate_prompt(
+            GENERATE_TEMPLATE_MESSAGE, {'CSS Code': css_code})
+        ai_response: Optional[str] = self.get_ai_response(user_prompt)
+        processed_data: str = self.process_ai_response(ai_response)
+        self.write_data_to_file(processed_data, output_file)
+
+    def merge_template_and_article_using_ai(self, template_file: str, article_file: str, output_file: str) -> None:
+        template_content = self.read_data_from_file(template_file)
+        article_content = self.read_data_from_file(article_file)
+        user_prompt: ChatCompletionMessageParam = self.generate_prompt(MERGE_TEMPLATE_AND_ARTICLE_MESSAGE, {
+                                                                       'Template Content': template_content, 'Article Content': article_content})
+        ai_response: Optional[str] = self.get_ai_response(user_prompt)
+        processed_data: str = self.process_ai_response(ai_response)
+        self.write_data_to_file(processed_data, output_file)
+
+    def merge_template_and_article_using_bs4(self, template_file: str, article_file: str, output_file: str) -> None:
+        template_content: str = self.read_data_from_file(template_file)
+        article_content: str = self.read_data_from_file(article_file)
         soup = BeautifulSoup(template_content, 'html.parser')
         body_tag: Optional[Tag] = soup.body
-        title_tag : Optional[Tag] = soup.title
+        title_tag: Optional[Tag] = soup.title
         if not body_tag or not title_tag:
-            raise ValueError('Templae is Invalid')
+            raise ValueError('Template is Invalid')
 
         title_tag.string = 'Merged Site'
         body_tag.append(BeautifulSoup(article_content, 'html.parser'))
-        # body_tag.append(article_content)
-        
         result_text = str(soup)
-        self.write_to_file(result_text, target)
+        self.write_data_to_file(result_text, output_file)
 
-    def read_from_file(self, file_name: str) -> str:
+    def read_data_from_file(self, file_name: str) -> str:
         if file_name == '':
             raise ValueError('Invalid File Name')
 
@@ -246,7 +266,7 @@ class Solution:
             file.close()
             return file_content
 
-    def write_to_file(self, file_content: str, file_name: str) -> None:
+    def write_data_to_file(self, file_content: str, file_name: str) -> None:
         if file_name == '':
             raise ValueError('Invalid File Name')
 
@@ -257,9 +277,9 @@ class Solution:
 
 if __name__ == '__main__':
     load_dotenv()
-    s = Solution(INPUT_ARTICLE_FILE, OUTPUT_ARTICLE_FILE)
+    s = Solution()
     # s.generate_article()
     # s.generate_template(CSS_STYLES)
     # s.merge_template_and_article_using_ai('template.html', 'artykul.html', 'merged.html')
-    s.merge_template_and_article_using_bs4(
-        'template.html', 'artykul.html', 'merged1.html')
+    # s.merge_template_and_article_using_bs4(
+    # 'template.html', 'artykul.html', 'merged1.html')
