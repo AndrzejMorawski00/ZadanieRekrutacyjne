@@ -139,7 +139,7 @@ AI_ROLE: ChatCompletionMessageParam = {
     "content": "You're a web developer assistant who can create a website based on a context provided by a user."
 }
 
-AI_MODEL = 'gpt-4o-mini'
+AI_MODEL: ChatModel = 'gpt-4o-mini'
 
 GENERATE_ARTICLE_MESSAGE: str = """
                     Based on a Article File Content that I provide, generate an HTML site following these rules:
